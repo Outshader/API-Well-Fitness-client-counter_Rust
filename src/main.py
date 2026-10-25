@@ -106,6 +106,7 @@ def get_club_data(s: requests.sessions.Session, GYMS: list[str]):
     return valid_data
 
 
+
 def get_gyms():
     GYMS = re.findall(r"\d+", GYM)
     GYMS_normal = {}
