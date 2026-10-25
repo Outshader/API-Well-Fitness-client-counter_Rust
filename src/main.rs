@@ -1,5 +1,8 @@
+use chrono::Local;
+use csv::{WriterBuilder};
 use serde::{Deserialize};
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::{fs};
 use std::error::Error;
 
@@ -7,11 +10,15 @@ const CLUB_DATA_URL: &str =
     "https://wellfitness.perfectgym.pl/ClientPortal2/Clubs/Clubs/GetMembersInClubs";
 const LOGIN_URL: &str = "https://wellfitness.perfectgym.pl/ClientPortal2/Auth/Login";
 
+
 #[derive(Debug, Deserialize)]
 struct Config {
     login: String,
     password: String,
     gyms: Vec<i16>,
+    discord: bool,
+    discord_url: String,
+    csv: bool
 }
 
 async fn login(
@@ -55,6 +62,55 @@ async fn get_club_data(
     Ok(valid_data)
 }
 
+async fn send_to_discord(url: &str, data: &HashMap<String, i16>, datetime: &String) -> Result<(), Box<dyn Error>> {
+    let client = reqwest::Client::new();
+
+    
+
+    let mut message = String::new();
+    
+    if data.len() > 1 {
+        message.push_str("Successfully logged: \n");
+        for (k,v) in data {
+            message.push_str(&format!("{v} people at {k}"))
+        };
+        message.push_str(&format!("at {datetime}"));
+    } else {
+        let (k,v) = data.iter().next().unwrap();
+        message.push_str(&format!("Successfully logged: {v} people at {k} at {datetime}"));
+    }
+    
+    let response = client.post(url).json(&serde_json::json!({"content": message})).send().await?;
+
+
+    Ok(())
+}
+
+fn save_to_csv(data: &HashMap<String, i16>, datetime: &str) -> Result<(), Box<dyn Error>> {
+    let file = OpenOptions::new().create(true).append(true).open("data/logs.csv")?;
+    
+    let needs_headers = file.metadata()?.len() == 0;
+
+    let mut writer = WriterBuilder::new().has_headers(false).from_writer(file);
+
+    if needs_headers {
+        writer.write_record(["ClubName", "Date", "Raw ppl count"])?;
+    }
+
+    for (location, people) in data {
+        writer.write_record([
+            location.as_str(),
+            &datetime,
+            &people.to_string(),
+        ])?;
+    } 
+
+    writer.flush()?;
+
+    Ok(())
+}
+
+
 fn get_gyms(gyms: Vec<i16>) -> Result<Vec<String>, Box<dyn Error>> {
    let mut reader = csv::ReaderBuilder::new().has_headers(true).from_path("data/clubs.csv")?;
 
@@ -75,7 +131,6 @@ fn get_gyms(gyms: Vec<i16>) -> Result<Vec<String>, Box<dyn Error>> {
    Ok(valid_gyms)
 }
 
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let s = reqwest::Client::builder().cookie_store(true).build()?;
@@ -89,6 +144,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     login(&s, config.login, config.password).await?;
 
     let data = get_club_data(s, gyms).await?;
+
+    let discord = config.discord; 
+    let discord_url = config.discord_url;
+
+    let datetime = Local::now().format("%Y-%m-%dT%H:%M").to_string();
+
+    println!("{}", discord_url);
+    if discord {
+        send_to_discord(&discord_url, &data, &datetime).await?;
+    };
+
+    let csv = config.csv;
+    
+    if csv {
+        save_to_csv(&data, &datetime)?;
+    } 
 
     println!("{:#?}", data);
 

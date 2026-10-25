@@ -8,17 +8,12 @@ gyms = []
 
 TODO(in order):
 --- for now
-1. saving results to CSV 
-2. config file additions (discord url, send_to_discord, save_to_csv)
-
-
---- later
-
-3. cmd line arguments
-4. error hnadling
-
+1. cmd line arguments
+2. error hnadling
 
 -- done 
 1. JSON response iteration - finding which gyms to save the data of
 2. discord webhook sending
 3. config file additions (gyms)
+4. saving results to CSV 
+5. config file additions (discord url, send_to_discord, save_to_csv)
