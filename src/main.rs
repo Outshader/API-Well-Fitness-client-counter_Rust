@@ -1,20 +1,18 @@
 use chrono::Local;
-use csv::{WriterBuilder};
-use serde::{Deserialize};
-use std::collections::HashMap;
-use std::fs::OpenOptions;
-use std::{fs};
-use std::error::Error;
 use clap::Parser;
-
+use csv::WriterBuilder;
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::error::Error;
+use std::{fs, string};
+use std::fs::OpenOptions;
 
 const CLUB_DATA_URL: &str =
     "https://wellfitness.perfectgym.pl/ClientPortal2/Clubs/Clubs/GetMembersInClubs";
 const LOGIN_URL: &str = "https://wellfitness.perfectgym.pl/ClientPortal2/Auth/Login";
 
-
 #[derive(Parser)]
-struct Args{
+struct Args {
     #[arg(short, long, num_args = 1.., value_delimiter = ',')]
     gyms: Option<Vec<i16>>,
 
@@ -25,7 +23,6 @@ struct Args{
     discord: bool,
 }
 
-
 #[derive(Debug, Deserialize)]
 struct Config {
     login: String,
@@ -33,7 +30,8 @@ struct Config {
     gyms: Vec<i16>,
     discord: bool,
     discord_url: String,
-    csv: bool
+    csv: bool,
+    csv_name: Option<String>
 }
 
 async fn login(
@@ -77,33 +75,43 @@ async fn get_club_data(
     Ok(valid_data)
 }
 
-async fn send_to_discord(url: &str, data: &HashMap<String, i16>, datetime: &String) -> Result<(), Box<dyn Error>> {
+async fn send_to_discord(
+    url: &str,
+    data: &HashMap<String, i16>,
+    datetime: &String,
+) -> Result<(), Box<dyn Error>> {
     let client = reqwest::Client::new();
 
-    
-
     let mut message = String::new();
-    
+
     if data.len() > 1 {
         message.push_str("Successfully logged: \n");
-        for (k,v) in data {
+        for (k, v) in data {
             message.push_str(&format!("{v} people at {k} \n"))
-        };
+        }
         message.push_str(&format!("at {datetime}"));
     } else {
-        let (k,v) = data.iter().next().unwrap();
-        message.push_str(&format!("Successfully logged: {v} people at {k} at {datetime}"));
+        let (k, v) = data.iter().next().unwrap();
+        message.push_str(&format!(
+            "Successfully logged: {v} people at {k} at {datetime}"
+        ));
     }
-    
-    let response = client.post(url).json(&serde_json::json!({"content": message})).send().await?;
 
+    let response = client
+        .post(url)
+        .json(&serde_json::json!({"content": message}))
+        .send()
+        .await?;
 
     Ok(())
 }
 
-fn save_to_csv(data: &HashMap<String, i16>, datetime: &str) -> Result<(), Box<dyn Error>> {
-    let file = OpenOptions::new().create(true).append(true).open("data/logs.csv")?;
-    
+fn save_to_csv(data: &HashMap<String, i16>, datetime: String, csv_name: String) -> Result<(), Box<dyn Error>> {
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("data/{csv_name}.csv"))?;
+
     let needs_headers = file.metadata()?.len() == 0;
 
     let mut writer = WriterBuilder::new().has_headers(false).from_writer(file);
@@ -113,37 +121,35 @@ fn save_to_csv(data: &HashMap<String, i16>, datetime: &str) -> Result<(), Box<dy
     }
 
     for (location, people) in data {
-        writer.write_record([
-            location.as_str(),
-            &datetime,
-            &people.to_string(),
-        ])?;
-    } 
+        writer.write_record([location.as_str(), &datetime, &people.to_string()])?;
+    }
 
     writer.flush()?;
 
     Ok(())
 }
 
-
 fn get_gyms(gyms: Vec<i16>) -> Result<Vec<String>, Box<dyn Error>> {
-   let mut reader = csv::ReaderBuilder::new().has_headers(true).from_path("data/clubs.csv")?;
+    let csv_data = include_str!("../data/clubs.csv");
 
-   let mut data: HashMap<i16, (String, String)> = HashMap::new();
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(csv_data.as_bytes());
 
-   for line in reader.deserialize() {
+    let mut data: HashMap<i16, (String, String)> = HashMap::new();
+
+    for line in reader.deserialize() {
         let (k, v1, v2): (i16, String, String) = line?;
         data.insert(k, (v1, v2));
-   }
+    }
 
-   let mut valid_gyms: Vec<String> = Vec::new(); 
+    let mut valid_gyms: Vec<String> = Vec::new();
 
-   for i in gyms{
-       valid_gyms.push(data.get(&i).unwrap().0.clone());   
-   }
+    for i in gyms {
+        valid_gyms.push(data.get(&i).unwrap().0.clone());
+    }
 
-
-   Ok(valid_gyms)
+    Ok(valid_gyms)
 }
 
 #[tokio::main]
@@ -158,27 +164,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let datetime = Local::now().format("%Y-%m-%dT%H:%M").to_string();
 
-    let discord = config.discord; 
+    let discord = config.discord;
     let discord_url = config.discord_url;
 
     let csv = config.csv;
 
     login(&s, config.login, config.password).await?;
 
-
     let data = get_club_data(s, gyms).await?;
 
-
-
-
-    if discord || args.discord{
+    if discord || args.discord {
         send_to_discord(&discord_url, &data, &datetime).await?;
     };
 
-    
+
     if csv || args.csv {
-        save_to_csv(&data, &datetime)?;
-    } 
+        let csv_name = config.csv_name
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.strip_suffix(".csv").unwrap_or(&s).to_string()
+            })
+            .unwrap_or_else(|| "logs".to_string());
+        save_to_csv(&data, datetime, csv_name)?;
+    }
 
     println!("{:#?}", data);
 

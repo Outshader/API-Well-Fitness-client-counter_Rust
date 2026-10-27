@@ -15,6 +15,9 @@ Clone this repo
 `git clone https://github.com/Outshader/well-fitness-occupancy-meter_rust`
 
 Run it with `cargo run` or build it with `cargo build`
+
+If you want to use the program with a binary. After building you'll only need to create the config.toml file. If you don't the program will not run, same if you omit fields: login and password. The logs.csv (or whatever you chose as the name) file however will just be created if it's missing.
+
 #### Command-line arguments
 The program accepts arguments 
 `--gyms` - with a value of space or , separated numbers. This variable determines which gyms the program will pull data from. If it’s not included, it will get the IDs from the config.toml file in the data folder
@@ -29,6 +32,7 @@ The config file expects those fields.
 `discord =` 
 `discord_url = “”`
 `csv =` 
+`csv_name =`  
 
 Where the field:
 **login** is your well fitness email
@@ -38,4 +42,4 @@ Those credentials are used to log into the well fitness endpoint to get the gym 
 **discord_url** is the url for your discord channel where you want your data sent.
 **discord** accepets only true or false as its inputs. It determines whether the program will send the results to the aforementioned discord webhook endpoint.
 **csv** is likewise a bool field (accepts only true or false). It determines whether the results will be saved in the logs.csv file in the data folder.
-
+**csv_name** is the name of the file you'd like your logs to be in. By default it's logs.csv. 
