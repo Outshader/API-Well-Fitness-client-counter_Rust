@@ -5,10 +5,25 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::{fs};
 use std::error::Error;
+use clap::Parser;
+
 
 const CLUB_DATA_URL: &str =
     "https://wellfitness.perfectgym.pl/ClientPortal2/Clubs/Clubs/GetMembersInClubs";
 const LOGIN_URL: &str = "https://wellfitness.perfectgym.pl/ClientPortal2/Auth/Login";
+
+
+#[derive(Parser)]
+struct Args{
+    #[arg(short, long, num_args = 1.., value_delimiter = ',')]
+    gyms: Option<Vec<i16>>,
+
+    #[arg(short, long, default_value_t = true)]
+    csv: bool,
+
+    #[arg(short, long, default_value_t = true)]
+    discord: bool,
+}
 
 
 #[derive(Debug, Deserialize)]
@@ -72,7 +87,7 @@ async fn send_to_discord(url: &str, data: &HashMap<String, i16>, datetime: &Stri
     if data.len() > 1 {
         message.push_str("Successfully logged: \n");
         for (k,v) in data {
-            message.push_str(&format!("{v} people at {k}"))
+            message.push_str(&format!("{v} people at {k} \n"))
         };
         message.push_str(&format!("at {datetime}"));
     } else {
@@ -134,30 +149,34 @@ fn get_gyms(gyms: Vec<i16>) -> Result<Vec<String>, Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let s = reqwest::Client::builder().cookie_store(true).build()?;
+    let args = Args::parse();
 
     let contents = fs::read_to_string("data/config.toml").expect("Failed to read config.toml");
-
     let config: Config = toml::from_str(&contents).expect("Failed to read config.toml");
 
-    let gyms = get_gyms(config.gyms)?;
+    let gyms = get_gyms(args.gyms.unwrap_or(config.gyms))?;
 
-    login(&s, config.login, config.password).await?;
-
-    let data = get_club_data(s, gyms).await?;
+    let datetime = Local::now().format("%Y-%m-%dT%H:%M").to_string();
 
     let discord = config.discord; 
     let discord_url = config.discord_url;
 
-    let datetime = Local::now().format("%Y-%m-%dT%H:%M").to_string();
+    let csv = config.csv;
 
-    println!("{}", discord_url);
-    if discord {
+    login(&s, config.login, config.password).await?;
+
+
+    let data = get_club_data(s, gyms).await?;
+
+
+
+
+    if discord || args.discord{
         send_to_discord(&discord_url, &data, &datetime).await?;
     };
 
-    let csv = config.csv;
     
-    if csv {
+    if csv || args.csv {
         save_to_csv(&data, &datetime)?;
     } 
 
