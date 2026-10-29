@@ -43,6 +43,7 @@ struct Config {
     discord_url: String,
     discord_watcher: bool,
     discord_token: String,
+    command_name: Option<String>,
     csv: bool,
     csv_name: Option<String>
 }
@@ -210,8 +211,28 @@ async fn api_main() -> Result<(), Error> {
 
 #[poise::command(slash_command)]
 async fn poil(ctx: Context<'_>, when: String) -> Result<(), Error> {
-    ctx.say(format!("Polling in {when}")).await?;    
-    let _ = api_main().await;
+    let when = when.trim();
+    
+    if when == "now" {
+        ctx.say(format!("Polling now")).await?;    
+        let _ = api_main().await;
+    } else {
+        ctx.say(format!("Polling in {when}")).await?;    
+        println!("Got request for polling");
+        let (number, multiplier) = match when.chars().last() {
+                Some('s') => (when.strip_suffix('s').unwrap(), 1_u64),
+                Some('m') => (when.strip_suffix('m').unwrap(), 60),
+                Some('h') => (when.strip_suffix('h').unwrap(), 3600),
+                _ => (when, 1)
+            };
+            let timer = number.parse::<u64>()?.checked_mul(multiplier).ok_or("Failed to parse number and multiplier")?;
+            
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(timer)).await;
+            let _ = api_main().await;
+        });
+    }
+
     Ok(())
 }
 
@@ -221,9 +242,17 @@ async fn watcher_main(config: Config) {
 
    let intents = serenity::GatewayIntents::non_privileged();
 
+    let mut poil_command = poil();
+
+    if let Some(name) = config.command_name.filter(|s| !s.is_empty()) {
+        poil_command.name = name.into();
+    } else {
+        poil_command.name = "poil".into();
+    }
+
    let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![poil()],
+            commands: vec![poil_command],
             ..Default::default()
         })
         .setup(|ctx, _ready, framework| {
@@ -236,6 +265,8 @@ async fn watcher_main(config: Config) {
                 Ok( Data {})
             })
         }).build();
+    
+    
 
     let mut client = serenity::ClientBuilder::new(token, intents).framework(framework).await.expect("Failed to create client");
 
