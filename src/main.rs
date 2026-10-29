@@ -1,15 +1,19 @@
-use chrono::Local;
-use clap::Parser;
+use chrono::{Local, naive};
+use clap::{Arg, Parser};
 use csv::WriterBuilder;
 use serde::Deserialize;
+use serenity::FutureExt;
+use tokio::time::interval;
+use core::sync;
 use std::collections::HashMap;
-use std::error::Error;
+use std::time::Duration;
 use std::{fs, string};
 use std::fs::OpenOptions;
 
 const CLUB_DATA_URL: &str =
     "https://wellfitness.perfectgym.pl/ClientPortal2/Clubs/Clubs/GetMembersInClubs";
 const LOGIN_URL: &str = "https://wellfitness.perfectgym.pl/ClientPortal2/Auth/Login";
+
 
 #[derive(Parser)]
 struct Args {
@@ -20,7 +24,10 @@ struct Args {
     csv: bool,
 
     #[arg(short, long, default_value_t = true)]
-    discord: bool,
+    discord_report: bool,
+
+    #[arg(short, long, default_value_t = true)]
+    discord_command: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +37,8 @@ struct Config {
     gyms: Vec<i16>,
     discord: bool,
     discord_url: String,
+    discord_watcher: bool,
+    discord_token: String,
     csv: bool,
     csv_name: Option<String>
 }
@@ -38,7 +47,7 @@ async fn login(
     s: &reqwest::Client,
     login: String,
     password: String,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String, Error> {
     let mut data: HashMap<&str, &str> = HashMap::new();
     data.insert("RememberMe", "false");
     data.insert("Login", &login);
@@ -51,7 +60,7 @@ async fn login(
 async fn get_club_data(
     s: reqwest::Client,
     gyms: Vec<String>,
-) -> Result<HashMap<String, i16>, Box<dyn Error>> {
+) -> Result<HashMap<String, i16>, Error> {
     let response = s.get(CLUB_DATA_URL).send().await?;
 
     let data: serde_json::Value = response.json().await?;
@@ -79,7 +88,7 @@ async fn send_to_discord(
     url: &str,
     data: &HashMap<String, i16>,
     datetime: &String,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Error> {
     let client = reqwest::Client::new();
 
     let mut message = String::new();
@@ -106,7 +115,7 @@ async fn send_to_discord(
     Ok(())
 }
 
-fn save_to_csv(data: &HashMap<String, i16>, datetime: String, csv_name: String) -> Result<(), Box<dyn Error>> {
+fn save_to_csv(data: &HashMap<String, i16>, datetime: String, csv_name: String) -> Result<(), Error> {
     let file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -129,7 +138,7 @@ fn save_to_csv(data: &HashMap<String, i16>, datetime: String, csv_name: String) 
     Ok(())
 }
 
-fn get_gyms(gyms: Vec<i16>) -> Result<Vec<String>, Box<dyn Error>> {
+fn get_gyms(gyms: Vec<i16>) -> Result<Vec<String>, Error> {
     let csv_data = include_str!("../data/clubs.csv");
 
     let mut reader = csv::ReaderBuilder::new()
@@ -152,43 +161,105 @@ fn get_gyms(gyms: Vec<i16>) -> Result<Vec<String>, Box<dyn Error>> {
     Ok(valid_gyms)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn api_main() -> Result<(), Error> {    
     let s = reqwest::Client::builder().cookie_store(true).build()?;
-    let args = Args::parse();
-
+    
     let contents = fs::read_to_string("data/config.toml").expect("Failed to read config.toml");
+    let args = Args::parse();
     let config: Config = toml::from_str(&contents).expect("Failed to read config.toml");
-
+    
     let gyms = get_gyms(args.gyms.unwrap_or(config.gyms))?;
-
+    
     let datetime = Local::now().format("%Y-%m-%dT%H:%M").to_string();
-
+    
     let discord = config.discord;
     let discord_url = config.discord_url;
-
+    
     let csv = config.csv;
-
+    
     login(&s, config.login, config.password).await?;
-
+    
     let data = get_club_data(s, gyms).await?;
-
-    if discord || args.discord {
+    
+    if discord || args.discord_report {
         send_to_discord(&discord_url, &data, &datetime).await?;
     };
-
-
+    
+    
     if csv || args.csv {
         let csv_name = config.csv_name
-            .filter(|s| !s.is_empty())
-            .map(|s| {
-                s.strip_suffix(".csv").unwrap_or(&s).to_string()
-            })
-            .unwrap_or_else(|| "logs".to_string());
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.strip_suffix(".csv").unwrap_or(&s).to_string()
+        })
+        .unwrap_or_else(|| "logs".to_string());
         save_to_csv(&data, datetime, csv_name)?;
     }
-
+    
     println!("{:#?}", data);
-
+    
     Ok(())
+}
+
+
+
+struct Data{}
+
+use poise::{framework, serenity_prelude as serenity};
+
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Context<'a> = poise::Context<'a, Data, Error>;
+
+#[poise::command(slash_command)]
+async fn poil(ctx: Context<'_>, when: String) -> Result<(), Error> {
+    ctx.say(format!("Polling in {when}")).await?;    
+    api_main().await;
+    Ok(())
+}
+
+
+async fn watcher_main(config: Config) {
+   let token = config.discord_token;
+
+   let intents = serenity::GatewayIntents::non_privileged();
+
+   let framework = poise::Framework::builder()
+        .options(poise::FrameworkOptions {
+            commands: vec![poil()],
+            ..Default::default()
+        })
+        .setup(|ctx, _ready, framework| {
+            Box::pin(async move {
+                poise::builtins::register_globally(
+                    ctx,
+                    &framework.options().commands,
+                ).await?;
+
+                Ok( Data {})
+            })
+        }).build();
+
+    let mut client = serenity::ClientBuilder::new(token, intents).framework(framework).await.expect("Failed to create client");
+
+    client.start().await.expect("Failed to start client");
+    
+    }
+
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let contents = fs::read_to_string("data/config.toml").expect("Failed to read config.toml");
+    let args = Args::parse();
+    let config: Config = toml::from_str(&contents).expect("Failed to read config.toml");
+
+    if config.discord_watcher || args.discord_command {
+        tokio::spawn(async {watcher_main(config).await});
+    }
+    let mut timer = interval(Duration::from_secs(1800));
+    
+    loop {
+        timer.tick().await;
+        
+        api_main().await?;
+    }    
 }
