@@ -1,19 +1,23 @@
-use chrono::{Local, naive};
-use clap::{Arg, Parser};
+use chrono::{Local};
+use clap::{Parser};
 use csv::WriterBuilder;
 use serde::Deserialize;
-use serenity::FutureExt;
-use tokio::time::interval;
-use core::sync;
+use tokio::time::{interval};
 use std::collections::HashMap;
-use std::time::Duration;
-use std::{fs, string};
+use std::time::{Duration};
+use std::{fs};
 use std::fs::OpenOptions;
+use poise::{serenity_prelude as serenity};
+
 
 const CLUB_DATA_URL: &str =
     "https://wellfitness.perfectgym.pl/ClientPortal2/Clubs/Clubs/GetMembersInClubs";
 const LOGIN_URL: &str = "https://wellfitness.perfectgym.pl/ClientPortal2/Auth/Login";
 
+
+struct Data{}
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Context<'a> = poise::Context<'a, Data, Error>;
 
 #[derive(Parser)]
 struct Args {
@@ -24,7 +28,7 @@ struct Args {
     csv: bool,
 
     #[arg(short, long, default_value_t = true)]
-    discord_report: bool,
+    webhook_report: bool,
 
     #[arg(short, long, default_value_t = true)]
     discord_command: bool,
@@ -53,17 +57,17 @@ async fn login(
     data.insert("Login", &login);
     data.insert("Password", &password);
 
-    let response = s.post(LOGIN_URL).json(&data).send().await?;
-    Ok(response.text().await?)
+    let _response = s.post(LOGIN_URL).json(&data).send().await?;
+    Ok(_response.text().await?)
 }
 
 async fn get_club_data(
     s: reqwest::Client,
     gyms: Vec<String>,
 ) -> Result<HashMap<String, i16>, Error> {
-    let response = s.get(CLUB_DATA_URL).send().await?;
+    let _response = s.get(CLUB_DATA_URL).send().await?;
 
-    let data: serde_json::Value = response.json().await?;
+    let data: serde_json::Value = _response.json().await?;
 
     let mut valid_data: HashMap<String, i16> = HashMap::new();
 
@@ -106,7 +110,7 @@ async fn send_to_discord(
         ));
     }
 
-    let response = client
+    let _response = client
         .post(url)
         .json(&serde_json::json!({"content": message}))
         .send()
@@ -181,7 +185,7 @@ async fn api_main() -> Result<(), Error> {
     
     let data = get_club_data(s, gyms).await?;
     
-    if discord || args.discord_report {
+    if discord || args.webhook_report {
         send_to_discord(&discord_url, &data, &datetime).await?;
     };
     
@@ -203,17 +207,11 @@ async fn api_main() -> Result<(), Error> {
 
 
 
-struct Data{}
-
-use poise::{framework, serenity_prelude as serenity};
-
-type Error = Box<dyn std::error::Error + Send + Sync>;
-type Context<'a> = poise::Context<'a, Data, Error>;
 
 #[poise::command(slash_command)]
 async fn poil(ctx: Context<'_>, when: String) -> Result<(), Error> {
     ctx.say(format!("Polling in {when}")).await?;    
-    api_main().await;
+    let _ = api_main().await;
     Ok(())
 }
 
@@ -256,10 +254,13 @@ async fn main() -> Result<(), Error> {
         tokio::spawn(async {watcher_main(config).await});
     }
     let mut timer = interval(Duration::from_secs(1800));
+
+    api_main().await?;
     
+    timer.tick().await; // consumes the first 'free' tick
+
     loop {
         timer.tick().await;
-        
         api_main().await?;
     }    
 }
